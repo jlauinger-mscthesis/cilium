@@ -20,6 +20,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/k8s"
+	k8sconst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
 	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/k8s/informer"
 	k8sversion "github.com/cilium/cilium/pkg/k8s/version"
@@ -27,7 +28,7 @@ import (
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/policy/groups"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -82,7 +83,7 @@ func enableCNPWatcher() error {
 
 	ciliumV2Controller := informer.NewInformerWithStore(
 		cache.NewListWatchFromClient(k8s.CiliumClient().CiliumV2().RESTClient(),
-			"ciliumnetworkpolicies", v1.NamespaceAll, fields.Everything()),
+			k8sconst.CNPPluralName, v1.NamespaceAll, fields.Everything()),
 		&cilium_v2.CiliumNetworkPolicy{},
 		0,
 		cache.ResourceEventHandlerFuncs{
@@ -136,6 +137,10 @@ func enableCNPWatcher() error {
 		cnpConverterFunc,
 		cnpStore,
 	)
+
+	if err := WaitForCRD(apiextensionsK8sClient, k8sconst.CNPName); err != nil {
+		return err
+	}
 	go ciliumV2Controller.Run(wait.NeverStop)
 
 	controller.NewManager().UpdateController("cnp-to-groups",

@@ -22,12 +22,13 @@ import (
 	operatorOption "github.com/cilium/cilium/operator/option"
 	"github.com/cilium/cilium/operator/watchers"
 	"github.com/cilium/cilium/pkg/controller"
-	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	k8sconst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
+	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/k8s/informer"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 
 	"github.com/sirupsen/logrus"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -119,13 +120,13 @@ func startCRDIdentityGC() {
 		})
 }
 
-func startManagingK8sIdentities() {
+func startManagingK8sIdentities() error {
 	identityHeartbeat = identity.NewIdentityHeartbeatStore(operatorOption.Config.IdentityHeartbeatTimeout)
 
 	identityStore = cache.NewStore(cache.DeletionHandlingMetaNamespaceKeyFunc)
 	identityInformer := informer.NewInformerWithStore(
 		cache.NewListWatchFromClient(ciliumK8sClient.CiliumV2().RESTClient(),
-			"ciliumidentities", v1.NamespaceAll, fields.Everything()),
+			k8sconst.CIDPluralName, v1.NamespaceAll, fields.Everything()),
 		&v2.CiliumIdentity{},
 		0,
 		cache.ResourceEventHandlerFuncs{
@@ -169,5 +170,9 @@ func startManagingK8sIdentities() {
 		identityStore,
 	)
 
+	if err := WaitForCRD(apiextensionsK8sClient, k8sconst.CIDName); err != nil {
+		return err
+	}
 	go identityInformer.Run(wait.NeverStop)
+	return nil
 }
