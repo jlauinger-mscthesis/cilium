@@ -32,8 +32,6 @@ spec:
       - args:
         - --config-dir=/tmp/cilium/config-map
         - --debug=$(CILIUM_DEBUG)
-        command:
-        - cilium-operator
         env:
         - name: K8S_NODE_NAME
           valueFrom:
