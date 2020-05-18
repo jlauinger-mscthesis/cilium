@@ -24,7 +24,7 @@ import (
 
 const (
 	// CustomResourceDefinitionGroup is the name of the third party resource group
-	CustomResourceDefinitionGroup = k8sconst.GroupName
+	CustomResourceDefinitionGroup = k8sconst.CustomResourceDefinitionGroup
 
 	// CustomResourceDefinitionVersion is the current version of the resource
 	CustomResourceDefinitionVersion = "v2"
