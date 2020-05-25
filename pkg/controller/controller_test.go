@@ -208,3 +208,67 @@ func (b *ControllerSuite) TestWaitForTermination(c *C) {
 		c.Fail()
 	}
 }
+
+func (b *ControllerSuite) TestWaitForSuccess(c *C) {
+	mngr := NewManager()
+	mngr.UpdateController("test1", ControllerParams{
+		DoFunc: func(ctx context.Context) error {
+			return nil
+		},
+		RunInterval: time.Duration(1) * time.Millisecond,
+	})
+	mngr.UpdateController("test2", ControllerParams{
+		DoFunc: func(ctx context.Context) error {
+			return fmt.Errorf("fail")
+		},
+		RunInterval:            time.Duration(1) * time.Millisecond,
+		ErrorRetryBaseDuration: time.Duration(1) * time.Millisecond,
+	})
+	test3Runs := 0
+	mngr.UpdateController("test3", ControllerParams{
+		DoFunc: func(ctx context.Context) error {
+			var err error
+			if test3Runs == 0 {
+				err = fmt.Errorf("fail on the 1st run")
+			}
+			test3Runs++
+			return err
+		},
+		RunInterval:            time.Duration(1) * time.Millisecond,
+		ErrorRetryBaseDuration: time.Duration(1) * time.Millisecond,
+	})
+
+	// Ensure that the channel does not get closed while the controller is
+	// still running
+	c.Assert(testutils.WaitUntil(func() bool {
+		select {
+		case <-mngr.TerminationChannel("test1"):
+			return false
+		case <-mngr.TerminationChannel("test2"):
+			return false
+		case <-mngr.TerminationChannel("test3"):
+			return false
+		default:
+			return true
+		}
+	}, 20*time.Millisecond), IsNil)
+
+	c.Assert(mngr.RemoveControllerOnSuccessAndWait("test1", 20*time.Millisecond), IsNil)
+	// The controller test1 must have been terminated already
+	select {
+	case <-mngr.TerminationChannel("test1"):
+	default:
+		c.Fail()
+	}
+
+	err := mngr.RemoveControllerOnSuccessAndWait("test2", 20*time.Millisecond)
+	c.Assert(err, ErrorMatches, "timeout exceeded for successful run of controller test2")
+
+	c.Assert(mngr.RemoveControllerOnSuccessAndWait("test3", 20*time.Millisecond), IsNil)
+	// The controller test3 must have been terminated already
+	select {
+	case <-mngr.TerminationChannel("test3"):
+	default:
+		c.Fail()
+	}
+}

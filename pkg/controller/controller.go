@@ -147,6 +147,7 @@ type Controller struct {
 	lastDuration      time.Duration
 	uuid              string
 	stop              chan struct{}
+	stopOnSuccessCh   chan struct{}
 	update            chan struct{}
 	ctxDoFunc         context.Context
 	cancelDoFunc      context.CancelFunc
@@ -188,6 +189,10 @@ func (c *Controller) GetLastErrorTimestamp() time.Time {
 }
 
 func (c *Controller) runController() {
+	// stopOnSuccess value determines whether controller should stop after
+	// successful run. It's set to true only if the stopOnSuccessCh channel
+	// is closed, which means that stop on success was requested.
+	stopOnSuccess := false
 	errorRetries := 1
 
 	c.mutex.RLock()
@@ -259,18 +264,42 @@ func (c *Controller) runController() {
 			c.mutex.Unlock()
 		}
 
+		// Shutdown if stop on success was requested by closed
+		// stopOnSuccessCh on previous interations and we have a
+		// successful run now.
+		if stopOnSuccess && c.successCount > 0 {
+			goto shutdown
+		}
+
 		select {
 		case <-c.stop:
 			goto shutdown
 
+		case <-c.stopOnSuccessCh:
+			if c.successCount > 0 {
+				goto shutdown
+			}
+			// If stop on success was requested, but there was no
+			// successful run yet, request exit on success during
+			// next iterations.
+			stopOnSuccess = true
+
 		case <-c.update:
-			// If we receive a signal on both channels c.stop and c.update,
-			// golang will pick either c.stop or c.update randomly.
+			// If we receive a signal both on c.update and any other channel,
+			// golang will pick either c.update or the other channel randomly.
 			// This select will make sure we don't execute the controller
 			// while we are shutting down.
 			select {
 			case <-c.stop:
 				goto shutdown
+			case <-c.stopOnSuccessCh:
+				if c.successCount > 0 {
+					goto shutdown
+				}
+				// If stop on success was requested, but there was no
+				// successful run yet, request exit on success during
+				// next iterations.
+				stopOnSuccess = true
 			default:
 			}
 			// Pick up any changes to the parameters in case the controller has
@@ -312,13 +341,26 @@ func (c *Controller) updateParamsLocked(params ControllerParams) {
 	}
 }
 
-func (c *Controller) stopController() {
+// stopControllerImpl stops the controller by closing the given stop channel.
+// It cals the cancel callback function and closes the update channel as well.
+// This function is not supposed to be called directly outside this module.
+func (c *Controller) stopControllerImpl(stopCh chan struct{}) {
 	if c.cancelDoFunc != nil {
 		c.cancelDoFunc()
 	}
 
-	close(c.stop)
+	close(stopCh)
 	close(c.update)
+}
+
+// stopController stops the contoller.
+func (c *Controller) stopController() {
+	c.stopControllerImpl(c.stop)
+}
+
+// stopControllerOnSucces stops the controller on the first successful run.
+func (c *Controller) stopControllerOnSuccess() {
+	c.stopControllerImpl(c.stopOnSuccessCh)
 }
 
 // logger returns a logrus object with controllerName and UUID fields.

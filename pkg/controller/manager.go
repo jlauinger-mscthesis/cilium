@@ -37,6 +37,10 @@ type Manager struct {
 	mutex       lock.RWMutex
 }
 
+// removeControllerFunc is a function which removes the given controller from
+// the manager.
+type removeControllerFunc func(*Controller)
+
 // NewManager allocates a new manager
 func NewManager() *Manager {
 	return &Manager{
@@ -96,11 +100,12 @@ func (m *Manager) updateController(name string, params ControllerParams) *Contro
 		ctrl.getLogger().Debug("Controller update time: ", time.Since(start))
 	} else {
 		ctrl = &Controller{
-			name:       name,
-			uuid:       uuid.NewUUID().String(),
-			stop:       make(chan struct{}),
-			update:     make(chan struct{}, 1),
-			terminated: make(chan struct{}),
+			name:            name,
+			uuid:            uuid.NewUUID().String(),
+			stop:            make(chan struct{}),
+			stopOnSuccessCh: make(chan struct{}),
+			update:          make(chan struct{}, 1),
+			terminated:      make(chan struct{}),
 		}
 		ctrl.updateParamsLocked(params)
 		ctrl.getLogger().Debug("Starting new controller")
@@ -123,8 +128,7 @@ func (m *Manager) updateController(name string, params ControllerParams) *Contro
 	return ctrl
 }
 
-func (m *Manager) removeController(ctrl *Controller) {
-	ctrl.stopController()
+func (m *Manager) removeControllerFromManager(ctrl *Controller) {
 	delete(m.controllers, ctrl.name)
 
 	globalStatus.mutex.Lock()
@@ -132,6 +136,16 @@ func (m *Manager) removeController(ctrl *Controller) {
 	globalStatus.mutex.Unlock()
 
 	ctrl.getLogger().Debug("Removed controller")
+}
+
+func (m *Manager) removeController(ctrl *Controller) {
+	ctrl.stopController()
+	m.removeControllerFromManager(ctrl)
+}
+
+func (m *Manager) removeControllerOnSuccess(ctrl *Controller) {
+	ctrl.stopControllerOnSuccess()
+	m.removeControllerFromManager(ctrl)
 }
 
 func (m *Manager) lookup(name string) *Controller {
@@ -145,7 +159,7 @@ func (m *Manager) lookup(name string) *Controller {
 	return nil
 }
 
-func (m *Manager) removeAndReturnController(name string) (*Controller, error) {
+func (m *Manager) removeAndReturnControllerImpl(name string, f removeControllerFunc) (*Controller, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -158,9 +172,17 @@ func (m *Manager) removeAndReturnController(name string) (*Controller, error) {
 		return nil, fmt.Errorf("unable to find controller %s", name)
 	}
 
-	m.removeController(oldCtrl)
+	f(oldCtrl)
 
 	return oldCtrl, nil
+}
+
+func (m *Manager) removeAndReturnController(name string) (*Controller, error) {
+	return m.removeAndReturnControllerImpl(name, m.removeController)
+}
+
+func (m *Manager) removeAndReturnControllerOnSuccess(name string) (*Controller, error) {
+	return m.removeAndReturnControllerImpl(name, m.removeControllerOnSuccess)
 }
 
 // RemoveController stops and removes a controller from the manager. If DoFunc
@@ -176,6 +198,26 @@ func (m *Manager) RemoveControllerAndWait(name string) error {
 	oldCtrl, err := m.removeAndReturnController(name)
 	if err == nil {
 		<-oldCtrl.terminated
+	}
+
+	return err
+}
+
+// RemoveControllerOnSuccessAndWait removes a controller after its first
+// successful run. If there is no successful run before the given timeout, it
+// returns an error.
+func (m *Manager) RemoveControllerOnSuccessAndWait(name string, timeout time.Duration) error {
+	oldCtrl, err := m.removeAndReturnControllerOnSuccess(name)
+	if err == nil {
+		select {
+		case <-oldCtrl.terminated:
+			return nil
+		case <-time.After(timeout):
+			// Force to stop the controller after timeout, even
+			// without successful runs.
+			close(oldCtrl.stop)
+			return fmt.Errorf("timeout exceeded for successful run of controller %s", name)
+		}
 	}
 
 	return err
@@ -257,6 +299,7 @@ func FakeManager(failingControllers int) *Manager {
 			name:              fmt.Sprintf("controller-%d", i),
 			uuid:              fmt.Sprintf("%d", i),
 			stop:              make(chan struct{}),
+			stopOnSuccessCh:   make(chan struct{}),
 			update:            make(chan struct{}, 1),
 			terminated:        make(chan struct{}),
 			lastError:         fmt.Errorf("controller failed"),
