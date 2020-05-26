@@ -59,7 +59,7 @@ details on how to set credentials, change region, VPC, cluster size, etc.
 
    .. code:: bash
 
-     eksctl create cluster -n test-cluster -N 0
+     eksctl create cluster -n test-cluster -N 0 --nodes-max 2
 
 You should see something like this:
 
