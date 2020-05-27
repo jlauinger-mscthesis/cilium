@@ -40,9 +40,31 @@ func Test(t *testing.T) {
 	TestingT(t)
 }
 
+type DummyListener struct {
+	wasCalled bool
+}
+
+func (l *DummyListener) OnIPIdentityCacheChange(ce ChangeEvent) {
+	l.wasCalled = true
+}
+
+func (l *DummyListener) OnIPIdentityCacheGC() {}
+
+func (l *DummyListener) WasCalled() bool {
+	wasCalled := l.wasCalled
+	l.wasCalled = false
+	return wasCalled
+}
+
 func (s *IPCacheTestSuite) TestIPCache(c *C) {
+	dummyListener := &DummyListener{}
+	IPIdentityCache.SetListeners([]IPIdentityMappingListener{
+		dummyListener,
+	})
+	c.Assert(dummyListener.WasCalled(), Equals, false)
+
 	endpointIP := "10.0.0.15"
-	identity := (identityPkg.NumericIdentity(68))
+	identity := identityPkg.NumericIdentity(68)
 
 	// Assure sane state at start.
 	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 0)
@@ -50,6 +72,7 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 
 	// Deletion of key that doesn't exist doesn't cause panic.
 	IPIdentityCache.Delete(endpointIP, source.KVStore)
+	c.Assert(dummyListener.WasCalled(), Equals, false)
 
 	IPIdentityCache.Upsert(endpointIP, nil, 0, nil, Identity{
 		ID:     identity,
@@ -59,11 +82,13 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 	// Assure both caches are updated..
 	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 1)
 	c.Assert(len(IPIdentityCache.identityToIPCache), Equals, 1)
+	c.Assert(dummyListener.WasCalled(), Equals, true)
 
 	cachedIdentity, exists := IPIdentityCache.LookupByIP(endpointIP)
 	c.Assert(exists, Equals, true)
 	c.Assert(cachedIdentity.ID, Equals, identity)
 	c.Assert(cachedIdentity.Source, Equals, source.KVStore)
+	c.Assert(dummyListener.WasCalled(), Equals, false)
 
 	// kubernetes source cannot update kvstore source
 	updated, _ := IPIdentityCache.Upsert(endpointIP, nil, 0, nil, Identity{
@@ -71,15 +96,17 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 		Source: source.Kubernetes,
 	})
 	c.Assert(updated, Equals, false)
+	c.Assert(dummyListener.WasCalled(), Equals, false)
 
-	IPIdentityCache.Upsert(endpointIP, nil, 0, nil, Identity{
+	updated, _ = IPIdentityCache.Upsert(endpointIP, nil, 0, nil, Identity{
 		ID:     identity,
 		Source: source.KVStore,
 	})
-
+	c.Assert(updated, Equals, true)
 	// No duplicates.
 	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 1)
 	c.Assert(len(IPIdentityCache.identityToIPCache), Equals, 1)
+	c.Assert(dummyListener.WasCalled(), Equals, true)
 
 	IPIdentityCache.Delete(endpointIP, source.KVStore)
 
@@ -88,6 +115,7 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 	c.Assert(len(IPIdentityCache.identityToIPCache), Equals, 0)
 	c.Assert(len(IPIdentityCache.ipToHostIPCache), Equals, 0)
 	c.Assert(len(IPIdentityCache.ipToK8sMetadata), Equals, 0)
+	c.Assert(dummyListener.WasCalled(), Equals, true)
 
 	_, exists = IPIdentityCache.LookupByIP(endpointIP)
 
@@ -103,6 +131,7 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 		ID:     identity,
 		Source: source.KVStore,
 	})
+	c.Assert(dummyListener.WasCalled(), Equals, true)
 
 	cachedHostIP, _ := IPIdentityCache.getHostIPCache(endpointIP)
 	c.Assert(cachedHostIP, checker.DeepEquals, hostIP)
@@ -113,6 +142,7 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 		ID:     newIdentity,
 		Source: source.KVStore,
 	})
+	c.Assert(dummyListener.WasCalled(), Equals, true)
 
 	// Ensure that update of cache with new identity doesn't keep old identity-to-ip
 	// mapping around.
@@ -126,6 +156,7 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 	}
 
 	IPIdentityCache.Delete(endpointIP, source.KVStore)
+	c.Assert(dummyListener.WasCalled(), Equals, true)
 
 	// Assure deletion occurs across both mappings.
 	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 0)
@@ -142,6 +173,7 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 			ID:     identities[index],
 			Source: source.KVStore,
 		})
+		c.Assert(dummyListener.WasCalled(), Equals, true)
 		cachedIdentity, _ := IPIdentityCache.LookupByIP(endpointIPs[index])
 		c.Assert(cachedIdentity.ID, Equals, identities[index])
 	}
@@ -155,6 +187,7 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 	c.Assert(reflect.DeepEqual(cachedEndpointIPs, expectedIPList), Equals, true)
 
 	IPIdentityCache.Delete("27.2.2.2", source.KVStore)
+	c.Assert(dummyListener.WasCalled(), Equals, true)
 
 	expectedIPList = map[string]struct{}{
 		"127.0.0.1": {},
