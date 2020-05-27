@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - pr/pchaigno/enable-host-firewall-in-ci
 
 jobs:
   preflight-clusterrole:
