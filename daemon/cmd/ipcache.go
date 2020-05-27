@@ -20,7 +20,6 @@ import (
 	"github.com/cilium/cilium/api/v1/models"
 	. "github.com/cilium/cilium/api/v1/server/restapi/policy"
 	"github.com/cilium/cilium/pkg/api"
-	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/source"
 
@@ -59,33 +58,31 @@ type ipCacheDumpListener struct {
 }
 
 // OnIPIdentityCacheChange is called by DumpToListenerLocked
-func (ipc *ipCacheDumpListener) OnIPIdentityCacheChange(modType ipcache.CacheModification,
-	cidr net.IPNet, oldHostIP, newHostIP net.IP, oldID *identity.NumericIdentity,
-	newID identity.NumericIdentity, encryptKey uint8, k8sMeta *ipcache.K8sMetadata) {
+func (ipc *ipCacheDumpListener) OnIPIdentityCacheChange(ce ipcache.ChangeEvent) {
 	// only capture entries which are a subnet of cidrFilter
-	if ipc.cidrFilter != nil && !containsSubnet(*ipc.cidrFilter, cidr) {
+	if ipc.cidrFilter != nil && !containsSubnet(*ipc.cidrFilter, ce.CIDR) {
 		return
 	}
 
-	cidrStr := cidr.String()
-	identity := int64(newID.Uint32())
+	cidrStr := ce.CIDR.String()
+	identity := int64(ce.NewID.Uint32())
 	hostIP := ""
-	if newHostIP != nil {
-		hostIP = newHostIP.String()
+	if ce.NewHostIP != nil {
+		hostIP = ce.NewHostIP.String()
 	}
 
 	entry := &models.IPListEntry{
 		Cidr:       &cidrStr,
 		Identity:   &identity,
 		HostIP:     hostIP,
-		EncryptKey: int64(encryptKey),
+		EncryptKey: int64(ce.EncryptKey),
 	}
 
-	if k8sMeta != nil {
+	if ce.K8sMeta != nil {
 		entry.Metadata = &models.IPListEntryMetadata{
 			Source:    string(source.Kubernetes),
-			Namespace: k8sMeta.Namespace,
-			Name:      k8sMeta.PodName,
+			Namespace: ce.K8sMeta.Namespace,
+			Name:      ce.K8sMeta.PodName,
 			// TODO (jrajahalme): Consider if named ports should be
 			//                    made visible in the model.
 		}

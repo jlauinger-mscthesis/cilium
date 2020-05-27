@@ -349,7 +349,15 @@ func (ipc *IPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8s
 
 	if callbackListeners {
 		for _, listener := range ipc.listeners {
-			listener.OnIPIdentityCacheChange(Upsert, *cidr, oldHostIP, hostIP, oldIdentity, newIdentity.ID, hostKey, k8sMeta)
+			listener.OnIPIdentityCacheChange(ChangeEvent{
+				ModType:    Upsert,
+				CIDR:       *cidr,
+				OldHostIP:  oldHostIP,
+				NewHostIP:  hostIP,
+				OldID:      oldIdentity,
+				NewID:      newIdentity.ID,
+				EncryptKey: hostKey,
+				K8sMeta:    k8sMeta})
 		}
 	}
 
@@ -367,7 +375,15 @@ func (ipc *IPCache) DumpToListenerLocked(listener IPIdentityMappingListener) {
 			endpointIP := net.ParseIP(ip)
 			cidr = endpointIPToCIDR(endpointIP)
 		}
-		listener.OnIPIdentityCacheChange(Upsert, *cidr, nil, hostIP, nil, identity.ID, encryptKey, k8sMeta)
+		listener.OnIPIdentityCacheChange(ChangeEvent{
+			ModType:    Upsert,
+			CIDR:       *cidr,
+			OldHostIP:  nil,
+			NewHostIP:  hostIP,
+			OldID:      nil,
+			NewID:      identity.ID,
+			EncryptKey: encryptKey,
+			K8sMeta:    k8sMeta})
 	}
 }
 
@@ -451,8 +467,15 @@ func (ipc *IPCache) deleteLocked(ip string, source source.Source) (namedPortsCha
 
 	if callbackListeners {
 		for _, listener := range ipc.listeners {
-			listener.OnIPIdentityCacheChange(cacheModification, *cidr, oldHostIP, newHostIP,
-				oldIdentity, newIdentity.ID, encryptKey, oldK8sMeta)
+			listener.OnIPIdentityCacheChange(ChangeEvent{
+				ModType:    cacheModification,
+				CIDR:       *cidr,
+				OldHostIP:  oldHostIP,
+				NewHostIP:  newHostIP,
+				OldID:      oldIdentity,
+				NewID:      newIdentity.ID,
+				EncryptKey: encryptKey,
+				K8sMeta:    oldK8sMeta})
 		}
 	}
 

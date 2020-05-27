@@ -15,12 +15,10 @@
 package envoy
 
 import (
-	"net"
 	"sort"
 	"sync"
 
 	"github.com/cilium/cilium/pkg/envoy/xds"
-	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 
@@ -76,37 +74,42 @@ func (cache *NPHDSCache) OnIPIdentityCacheGC() {
 
 // OnIPIdentityCacheChange pushes modifications to the IP<->Identity mapping
 // into the Network Policy Host Discovery Service (NPHDS).
-func (cache *NPHDSCache) OnIPIdentityCacheChange(modType ipcache.CacheModification, cidr net.IPNet,
-	oldHostIP, newHostIP net.IP, oldID *identity.NumericIdentity, newID identity.NumericIdentity,
-	encryptKey uint8, k8sMeta *ipcache.K8sMetadata) {
+func (cache *NPHDSCache) OnIPIdentityCacheChange(ce ipcache.ChangeEvent) {
 	// An upsert where an existing pair exists should translate into a
 	// delete (for the old Identity) followed by an upsert (for the new).
-	if oldID != nil && modType == ipcache.Upsert {
+	if ce.OldID != nil && ce.ModType == ipcache.Upsert {
 		// Skip update if identity is identical
-		if *oldID == newID {
+		if *ce.OldID == ce.NewID {
 			return
 		}
 
-		cache.OnIPIdentityCacheChange(ipcache.Delete, cidr, nil, nil, nil, *oldID, encryptKey, k8sMeta)
+		deleteEvent := ipcache.ChangeEvent{
+			ModType:    ipcache.Delete,
+			CIDR:       ce.CIDR,
+			NewID:      *ce.OldID,
+			EncryptKey: ce.EncryptKey,
+			K8sMeta:    ce.K8sMeta,
+		}
+		cache.OnIPIdentityCacheChange(deleteEvent)
 	}
 
-	cidrStr := cidr.String()
+	cidrStr := ce.CIDR.String()
 
 	scopedLog := log.WithFields(logrus.Fields{
 		logfields.IPAddr:       cidrStr,
-		logfields.Identity:     newID,
-		logfields.Modification: modType,
+		logfields.Identity:     ce.NewID,
+		logfields.Modification: ce.ModType,
 	})
 
 	// Look up the current resources for the specified Identity.
-	resourceName := newID.StringID()
+	resourceName := ce.NewID.StringID()
 	msg, err := cache.Lookup(NetworkPolicyHostsTypeURL, resourceName)
 	if err != nil {
 		scopedLog.WithError(err).Warning("Can't lookup NPHDS cache")
 		return
 	}
 
-	switch modType {
+	switch ce.ModType {
 	case ipcache.Upsert:
 		var hostAddresses []string
 		if msg == nil {
@@ -122,7 +125,7 @@ func (cache *NPHDSCache) OnIPIdentityCacheChange(modType ipcache.CacheModificati
 		sort.Strings(hostAddresses)
 
 		newNpHost := envoyAPI.NetworkPolicyHosts{
-			Policy:        uint64(newID),
+			Policy:        uint64(ce.NewID),
 			HostAddresses: hostAddresses,
 		}
 		if err := newNpHost.Validate(); err != nil {

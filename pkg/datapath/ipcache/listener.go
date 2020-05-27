@@ -17,14 +17,12 @@ package ipcache
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/controller"
-	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -81,9 +79,7 @@ func NewListener(d datapath, mn monitorNotify) *BPFListener {
 	return newListener(ipcacheMap.IPCache, d, mn)
 }
 
-func (l *BPFListener) notifyMonitor(modType ipcache.CacheModification,
-	cidr net.IPNet, oldHostIP, newHostIP net.IP, oldID *identity.NumericIdentity,
-	newID identity.NumericIdentity, encryptKey uint8, k8sMeta *ipcache.K8sMetadata) {
+func (l *BPFListener) notifyMonitor(ce ipcache.ChangeEvent) {
 	var (
 		k8sNamespace, k8sPodName string
 		newIdentity, oldIdentity uint32
@@ -94,21 +90,21 @@ func (l *BPFListener) notifyMonitor(modType ipcache.CacheModification,
 		return
 	}
 
-	if k8sMeta != nil {
-		k8sNamespace = k8sMeta.Namespace
-		k8sPodName = k8sMeta.PodName
+	if ce.K8sMeta != nil {
+		k8sNamespace = ce.K8sMeta.Namespace
+		k8sPodName = ce.K8sMeta.PodName
 	}
 
-	newIdentity = newID.Uint32()
-	if oldID != nil {
-		oldIdentity = (*oldID).Uint32()
+	newIdentity = ce.NewID.Uint32()
+	if ce.OldID != nil {
+		oldIdentity = (*ce.OldID).Uint32()
 		oldIdentityPtr = &oldIdentity
 	}
 
-	repr, err := monitorAPI.IPCacheNotificationRepr(cidr.String(), newIdentity, oldIdentityPtr,
-		newHostIP, oldHostIP, encryptKey, k8sNamespace, k8sPodName)
+	repr, err := monitorAPI.IPCacheNotificationRepr(ce.CIDR.String(), newIdentity, oldIdentityPtr,
+		ce.NewHostIP, ce.OldHostIP, ce.EncryptKey, k8sNamespace, k8sPodName)
 	if err == nil {
-		switch modType {
+		switch ce.ModType {
 		case ipcache.Upsert:
 			l.monitorNotify.SendNotification(monitorAPI.AgentNotifyIPCacheUpserted, repr)
 		case ipcache.Delete:
@@ -124,22 +120,19 @@ func (l *BPFListener) notifyMonitor(modType ipcache.CacheModification,
 // 'oldIPIDPair' is ignored here, because in the BPF maps an update for the
 // IP->ID mapping will replace any existing contents; knowledge of the old pair
 // is not required to upsert the new pair.
-func (l *BPFListener) OnIPIdentityCacheChange(modType ipcache.CacheModification, cidr net.IPNet,
-	oldHostIP, newHostIP net.IP, oldID *identity.NumericIdentity, newID identity.NumericIdentity,
-	encryptKey uint8, k8sMeta *ipcache.K8sMetadata) {
-
+func (l *BPFListener) OnIPIdentityCacheChange(ce ipcache.ChangeEvent) {
 	scopedLog := log
 	if option.Config.Debug {
 		scopedLog = log.WithFields(logrus.Fields{
-			logfields.IPAddr:       cidr,
-			logfields.Identity:     newID,
-			logfields.Modification: modType,
+			logfields.IPAddr:       ce.CIDR,
+			logfields.Identity:     ce.NewID,
+			logfields.Modification: ce.ModType,
 		})
 	}
 
 	scopedLog.Debug("Daemon notified of IP-Identity cache state change")
 
-	l.notifyMonitor(modType, cidr, oldHostIP, newHostIP, oldID, newID, encryptKey, k8sMeta)
+	l.notifyMonitor(ce)
 
 	// TODO - see if we can factor this into an interface under something like
 	// pkg/datapath instead of in the daemon directly so that the code is more
@@ -147,22 +140,22 @@ func (l *BPFListener) OnIPIdentityCacheChange(modType ipcache.CacheModification,
 
 	// Update BPF Maps.
 
-	key := ipcacheMap.NewKey(cidr.IP, cidr.Mask)
+	key := ipcacheMap.NewKey(ce.CIDR.IP, ce.CIDR.Mask)
 
-	switch modType {
+	switch ce.ModType {
 	case ipcache.Upsert:
 		value := ipcacheMap.RemoteEndpointInfo{
-			SecurityIdentity: uint32(newID),
-			Key:              encryptKey,
+			SecurityIdentity: uint32(ce.NewID),
+			Key:              ce.EncryptKey,
 		}
 
-		if newHostIP != nil {
+		if ce.NewHostIP != nil {
 			// If the hostIP is specified and it doesn't point to
 			// the local host, then the ipcache should be populated
 			// with the hostIP so that this traffic can be guided
 			// to a tunnel endpoint destination.
 			externalIP := node.GetExternalIPv4()
-			if ip4 := newHostIP.To4(); ip4 != nil && !ip4.Equal(externalIP) {
+			if ip4 := ce.NewHostIP.To4(); ip4 != nil && !ip4.Equal(externalIP) {
 				copy(value.TunnelEndpoint[:], ip4)
 			}
 		}
@@ -171,9 +164,9 @@ func (l *BPFListener) OnIPIdentityCacheChange(modType ipcache.CacheModification,
 			scopedLog.WithError(err).WithFields(logrus.Fields{
 				"key":                  key.String(),
 				"value":                value.String(),
-				logfields.IPAddr:       cidr,
-				logfields.Identity:     newID,
-				logfields.Modification: modType,
+				logfields.IPAddr:       ce.CIDR,
+				logfields.Identity:     ce.NewID,
+				logfields.Modification: ce.ModType,
 			}).Warning("unable to update bpf map")
 		}
 	case ipcache.Delete:
@@ -181,9 +174,9 @@ func (l *BPFListener) OnIPIdentityCacheChange(modType ipcache.CacheModification,
 		if err != nil {
 			scopedLog.WithError(err).WithFields(logrus.Fields{
 				"key":                  key.String(),
-				logfields.IPAddr:       cidr,
-				logfields.Identity:     newID,
-				logfields.Modification: modType,
+				logfields.IPAddr:       ce.CIDR,
+				logfields.Identity:     ce.NewID,
+				logfields.Modification: ce.ModType,
 			}).Warning("unable to delete from bpf map")
 		}
 	default:

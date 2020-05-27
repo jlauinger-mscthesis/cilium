@@ -31,18 +31,32 @@ const (
 	Delete CacheModification = "Delete"
 )
 
+// ChangeEvent describes a change to the IP cache. A ChangeEvent is sent to IP cache listeners on
+// any modification of the IP cache.
+// If an existing CIDR->ID mapping is updated, then
+// OldID is not nil; otherwise it is nil.
+// HostIP is the IP address of the location of the cidr.
+// HostIP is optional and may only be non-nil for an Upsert modification.
+// K8sMeta contains the Kubernetes pod namespace and name behind the IP
+// and may be nil.
+
+type ChangeEvent struct {
+	ModType    CacheModification
+	CIDR       net.IPNet
+	OldHostIP  net.IP
+	NewHostIP  net.IP
+	OldID      *identity.NumericIdentity
+	NewID      identity.NumericIdentity
+	EncryptKey uint8
+	K8sMeta    *K8sMetadata
+}
+
 // IPIdentityMappingListener represents a component that is interested in
 // learning about IP to Identity mapping events.
 type IPIdentityMappingListener interface {
 	// OnIPIdentityCacheChange will be called whenever there the state of the
-	// IPCache has changed. If an existing CIDR->ID mapping is updated, then
-	// oldID is not nil; otherwise it is nil.
-	// hostIP is the IP address of the location of the cidr.
-	// hostIP is optional and may only be non-nil for an Upsert modification.
-	// k8sMeta contains the Kubernetes pod namespace and name behind the IP
-	// and may be nil.
-	OnIPIdentityCacheChange(modType CacheModification, cidr net.IPNet, oldHostIP, newHostIP net.IP,
-		oldID *identity.NumericIdentity, newID identity.NumericIdentity, encryptKey uint8, k8sMeta *K8sMetadata)
+	// IPCache has changed.
+	OnIPIdentityCacheChange(ce ChangeEvent)
 
 	// OnIPIdentityCacheGC will be called to sync other components which are
 	// reliant upon the IPIdentityCache with the IPIdentityCache.
