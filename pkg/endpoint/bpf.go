@@ -1302,7 +1302,7 @@ func (e *Endpoint) syncPolicyMapController() {
 				defer e.unlock()
 				return e.syncPolicyMapWithDump()
 			},
-			RunInterval: 1 * time.Minute,
+			RunInterval: 5 * time.Second,
 			Context:     e.aliveCtx,
 		},
 	)
