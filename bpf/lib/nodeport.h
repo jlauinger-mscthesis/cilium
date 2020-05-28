@@ -361,7 +361,9 @@ int tail_nodeport_ipv6_dsr(struct __ctx_buff *ctx)
 				 BPF_FIB_LOOKUP_DIRECT | BPF_FIB_LOOKUP_OUTPUT);
 		if (ret != 0)
 			return DROP_NO_FIB;
-
+		if (nodeport_lb_hairpin())
+			map_update_elem(&NODEPORT_NEIGH6, &ip6->daddr,
+					&fib_params.dmac, 0);
 		if (eth_store_daddr(ctx, fib_params.dmac, 0) < 0)
 			return DROP_WRITE_ERROR;
 		if (eth_store_saddr(ctx, fib_params.smac, 0) < 0)
@@ -477,6 +479,9 @@ int tail_nodeport_nat_ipv6(struct __ctx_buff *ctx)
 			ret = DROP_NO_FIB;
 			goto drop_err;
 		}
+		if (nodeport_lb_hairpin())
+			map_update_elem(&NODEPORT_NEIGH6, &ip6->daddr,
+					&fib_params.dmac, 0);
 
 		if (eth_store_daddr(ctx, fib_params.dmac, 0) < 0) {
 			ret = DROP_WRITE_ERROR;
@@ -1022,7 +1027,9 @@ int tail_nodeport_ipv4_dsr(struct __ctx_buff *ctx)
 				 BPF_FIB_LOOKUP_DIRECT | BPF_FIB_LOOKUP_OUTPUT);
 		if (ret != 0)
 			return DROP_NO_FIB;
-
+		if (nodeport_lb_hairpin())
+			map_update_elem(&NODEPORT_NEIGH4, &ip4->daddr,
+					&fib_params.dmac, 0);
 		if (eth_store_daddr(ctx, fib_params.dmac, 0) < 0)
 			return DROP_WRITE_ERROR;
 		if (eth_store_saddr(ctx, fib_params.smac, 0) < 0)
@@ -1133,6 +1140,9 @@ int tail_nodeport_nat_ipv4(struct __ctx_buff *ctx)
 			ret = DROP_NO_FIB;
 			goto drop_err;
 		}
+		if (nodeport_lb_hairpin())
+			map_update_elem(&NODEPORT_NEIGH4, &ip4->daddr,
+					&fib_params.dmac, 0);
 
 		if (eth_store_daddr(ctx, fib_params.dmac, 0) < 0) {
 			ret = DROP_WRITE_ERROR;
