@@ -149,6 +149,10 @@ type Daemon struct {
 	healthEndpointRouting *linuxrouting.RoutingInfo
 
 	hubbleObserver *observer.LocalObserverServer
+
+	// k8sCachesSynced is closed when all essential Kubernetes caches have
+	// been fully synchronized
+	k8sCachesSynced <-chan struct{}
 }
 
 // GetPolicyRepository returns the policy repository of the daemon
@@ -365,18 +369,6 @@ func NewDaemon(ctx context.Context, dp datapath.Datapath) (*Daemon, *endpointRes
 		return nil, nil, err
 	}
 
-	// Read the service IDs of existing services from the BPF map and
-	// reserve them. This must be done *before* connecting to the
-	// Kubernetes apiserver and serving the API to ensure service IDs are
-	// not changing across restarts or that a new service could accidentally
-	// use an existing service ID.
-	// Also, create missing v2 services from the corresponding legacy ones.
-	if option.Config.RestoreState && !option.Config.DryMode {
-		bootstrapStats.restore.Start()
-		d.svc.RestoreServices()
-		bootstrapStats.restore.End(true)
-	}
-
 	t, err := trigger.NewTrigger(trigger.Parameters{
 		Name:            "policy_update",
 		MetricsObserver: &policyTriggerMetrics{},
@@ -395,6 +387,20 @@ func NewDaemon(ctx context.Context, dp datapath.Datapath) (*Daemon, *endpointRes
 	treatRemoteNodeAsHost := option.Config.AlwaysAllowLocalhost() && !option.Config.EnableRemoteNodeIdentity
 	policyApi.InitEntities(option.Config.ClusterName, treatRemoteNodeAsHost)
 
+	d.k8sCachesSynced = d.k8sWatcher.InitK8sSubsystem()
+
+	// Read the service IDs of existing services from the BPF map and
+	// reserve them. This must be done *before* connecting to the
+	// Kubernetes apiserver and serving the API to ensure service IDs are
+	// not changing across restarts or that a new service could accidentally
+	// use an existing service ID.
+	// Also, create missing v2 services from the corresponding legacy ones.
+	if option.Config.RestoreState && !option.Config.DryMode {
+		bootstrapStats.restore.Start()
+		d.svc.RestoreServices()
+		bootstrapStats.restore.End(true)
+	}
+
 	bootstrapStats.cleanup.Start()
 	err = clearCiliumVeths()
 	bootstrapStats.cleanup.EndError(err)
@@ -403,11 +409,6 @@ func NewDaemon(ctx context.Context, dp datapath.Datapath) (*Daemon, *endpointRes
 	}
 
 	if k8s.IsEnabled() {
-		bootstrapStats.k8sInit.Start()
-		if err := k8s.Init(option.Config); err != nil {
-			log.WithError(err).Fatal("Unable to initialize Kubernetes subsystem")
-		}
-
 		if err := k8s.RegisterCRDs(); err != nil {
 			log.WithError(err).Fatal("Unable to register CRDs")
 		}
