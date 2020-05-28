@@ -225,7 +225,68 @@ func (s *IPCacheTestSuite) TestIPCache(c *C) {
 
 	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 0)
 	c.Assert(len(IPIdentityCache.identityToIPCache), Equals, 0)
+}
 
+func (s *IPCacheTestSuite) TestIPCacheShadowing(c *C) {
+	dummyListener := &DummyListener{}
+	IPIdentityCache.SetListeners([]IPIdentityMappingListener{
+		dummyListener,
+	})
+	c.Assert(dummyListener.WasCalled(), Equals, false)
+
+	shadowingEndpointIP := "10.1.0.15"
+	shadowingIdentity := identityPkg.NumericIdentity(16507)
+
+	IPIdentityCache.Upsert(shadowingEndpointIP, nil, 0, nil, Identity{
+		ID:     shadowingIdentity,
+		Source: source.Generated,
+	})
+	c.Assert(dummyListener.WasCalled(), Equals, true)
+
+	cachedIdentityIP, exists := IPIdentityCache.LookupByPrefix(shadowingEndpointIP)
+	c.Assert(exists, Equals, true)
+
+	// Test insertion of CIDR identity
+	endpointCIDR := "10.1.0.15/32"
+	cidrIdentity := identityPkg.NumericIdentity(4223)
+
+	cachedIdentityCIDR, exists := IPIdentityCache.LookupByPrefix(endpointCIDR)
+	c.Assert(exists, Equals, true)
+
+	c.Assert(cachedIdentityCIDR, Equals, cachedIdentityIP)
+
+	IPIdentityCache.Upsert(endpointCIDR, nil, 0, nil, Identity{
+		ID:     cidrIdentity,
+		Source: source.Kubernetes,
+	})
+	c.Assert(dummyListener.WasCalled(), Equals, false)
+
+	cachedIdentity, exists := IPIdentityCache.LookupByPrefix(endpointCIDR)
+	c.Assert(exists, Equals, true)
+	c.Assert(cachedIdentity.ID, Equals, shadowingIdentity)
+
+	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 2)
+	c.Assert(len(IPIdentityCache.identityToIPCache), Equals, 2)
+
+	IPIdentityCache.Delete(endpointCIDR, source.Kubernetes)
+	c.Assert(dummyListener.WasCalled(), Equals, false)
+	_, exists = IPIdentityCache.LookupByIP(endpointCIDR)
+	c.Assert(exists, Equals, false)
+	_, exists = IPIdentityCache.LookupByIP(shadowingEndpointIP)
+	c.Assert(exists, Equals, true)
+
+	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 1)
+	c.Assert(len(IPIdentityCache.identityToIPCache), Equals, 1)
+
+	IPIdentityCache.Delete(shadowingEndpointIP, source.Generated)
+	c.Assert(dummyListener.WasCalled(), Equals, true)
+	_, exists = IPIdentityCache.LookupByIP(endpointCIDR)
+	c.Assert(exists, Equals, false)
+	_, exists = IPIdentityCache.LookupByIP(shadowingEndpointIP)
+	c.Assert(exists, Equals, false)
+
+	c.Assert(len(IPIdentityCache.ipToIdentityCache), Equals, 0)
+	c.Assert(len(IPIdentityCache.identityToIPCache), Equals, 0)
 }
 
 func (s *IPCacheTestSuite) TestKeyToIPNet(c *C) {
