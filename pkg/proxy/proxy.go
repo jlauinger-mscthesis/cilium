@@ -15,7 +15,6 @@
 package proxy
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -386,6 +385,9 @@ func (p *Proxy) ReinstallRules() {
 // The proxy listening port is returned, but proxy configuration on that port
 // may still be ongoing asynchronously. Caller should wait for successful completion
 // on 'wg' before assuming the returned proxy port is listening.
+// Caller must call exactly one of the returned functions:
+// - finalizeFunc to make the changes stick, or
+// - revertFunc to cancel the changes.
 func (p *Proxy) CreateOrUpdateRedirect(l4 policy.ProxyPolicy, id string, localEndpoint logger.EndpointUpdater,
 	wg *completion.WaitGroup) (proxyPort uint16, err error, finalizeFunc revert.FinalizeFunc, revertFunc revert.RevertFunc) {
 
@@ -491,16 +493,16 @@ func (p *Proxy) CreateOrUpdateRedirect(l4 policy.ProxyPolicy, id string, localEn
 			pp.reservePort()
 
 			revertStack.Push(func() error {
-				completionCtx, cancel := context.WithCancel(context.Background())
-				proxyWaitGroup := completion.NewWaitGroup(completionCtx)
-				err, finalize, _ := p.RemoveRedirect(id, proxyWaitGroup)
-				// Don't wait for an ACK. This is best-effort. Just clean up the completions.
-				cancel()
-				proxyWaitGroup.Wait() // Ignore the returned error.
-				if err == nil && finalize != nil {
-					finalize()
+				// Proxy port refcount has not been incremented yet, so it must not be decremented
+				// when reverting. Undo what we have done above.
+				p.mutex.Lock()
+				delete(p.redirects, id)
+				p.mutex.Unlock()
+				implFinalizeFunc, _ := redir.implementation.Close(wg)
+				if implFinalizeFunc != nil {
+					implFinalizeFunc()
 				}
-				return err
+				return nil
 			})
 
 			// Set the proxy port only after an ACK is received.
@@ -532,7 +534,7 @@ func (p *Proxy) CreateOrUpdateRedirect(l4 policy.ProxyPolicy, id string, localEn
 	return 0, err, nil, nil
 }
 
-// RemoveRedirect removes an existing redirect.
+// RemoveRedirect removes an existing redirect that has been successfully created earlier.
 func (p *Proxy) RemoveRedirect(id string, wg *completion.WaitGroup) (error, revert.FinalizeFunc, revert.RevertFunc) {
 	p.mutex.Lock()
 	defer func() {
