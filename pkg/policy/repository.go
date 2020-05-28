@@ -710,6 +710,10 @@ func (p *Repository) computePolicyEnforcementAndRules(securityIdentity *identity
 			return true, true, matchingRules
 		}
 
+		if lbls.Has(labels.IDNameHost) && !option.Config.EnableHostFirewall {
+			return false, false, matchingRules
+		}
+
 		// Default mode means that if rules contain labels that match this
 		// endpoint, then enable policy enforcement for this endpoint.
 		return ingress, egress, matchingRules
